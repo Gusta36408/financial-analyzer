@@ -3,6 +3,9 @@
 import logging
 
 import pandas as pd
+
+from pandas.io.formats.style import Styler
+
 import streamlit as st
 
 from models.financial_models import CvmFinancialData, EvolutionComparison, FinancialIndicator, RawFinancialStatement, StandardizedFinancialData, StandardizedNode, VerticalHorizontalAnalysis
@@ -32,6 +35,104 @@ def apply_styles() -> None:
         </style>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def format_number_br(value, decimals=2):
+    """Formata números para exibição no padrão brasileiro, sem alterar o valor original."""
+    if value is None:
+        return "—"
+    if isinstance(value, str):
+        return value
+    try:
+        return f"{value:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (TypeError, ValueError):
+        return value
+
+
+def format_currency_br(value):
+    """Formata valores monetários em reais."""
+    if value is None:
+        return "—"
+    if isinstance(value, str):
+        return value
+    try:
+        return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (TypeError, ValueError):
+        return value
+
+
+def format_percent_br(value):
+    """Formata percentuais como 12,35%."""
+    if value is None:
+        return "—"
+    if isinstance(value, str):
+        return value
+    try:
+        return f"{value:,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (TypeError, ValueError):
+        return value
+
+
+def format_index_br(value):
+    """Formata índices financeiros como 1,45, sem símbolo de moeda ou percentual."""
+    if value is None:
+        return "—"
+    if isinstance(value, str):
+        return value
+    try:
+        return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except (TypeError, ValueError):
+        return value
+
+
+def format_dataframe_br(df: pd.DataFrame, currency_columns=None, percent_columns=None, index_columns=None) -> Styler:
+    """Formata cada tipo de dado de acordo com seu significado contábil."""
+    currency_columns = set(currency_columns or [])
+    percent_columns = set(percent_columns or [])
+    index_columns = set(index_columns or [])
+    formatters = {}
+
+    for column in df.columns:
+        if column in currency_columns:
+            formatters[column] = format_currency_br
+        elif column in percent_columns:
+            formatters[column] = format_percent_br
+        elif column in index_columns:
+            formatters[column] = format_index_br
+        elif pd.api.types.is_numeric_dtype(df[column]):
+            formatters[column] = format_number_br
+
+    return df.style.format(formatters, na_rep="—")
+
+
+def monetary_columns(df: pd.DataFrame) -> list:
+    """Identifica colunas que representam valores monetários."""
+    keywords = ("valor", "total", "receita", "despesa", "ativo", "passivo", "patrimônio",
+                "capital", "diferença", "numerador", "denominador", "atual", "anterior",
+                "variação absoluta", "maior valor", "menor valor", "lucro", "resultado")
+    return [column for column in df.columns
+            if any(keyword in str(column).lower() for keyword in keywords)]
+
+
+def percent_columns(df: pd.DataFrame) -> list:
+    """Identifica colunas que representam percentuais."""
+    return [column for column in df.columns
+            if "(%)" in str(column) or "%" in str(column) or str(column).lower() in {"p.p."}]
+
+
+def index_columns(df: pd.DataFrame) -> list:
+    """Identifica colunas de indicadores que não são percentuais."""
+    return [column for column in df.columns
+            if str(column).upper() in {"IPL", "PCT", "CE", "EFSAT", "LG", "LC", "LS", "ICJ", "GA", "RSV", "ROA", "ROE"}]
+
+
+def style_accounting_dataframe(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    return format_dataframe_br(
+        df,
+        currency_columns=monetary_columns(df),
+        percent_columns=percent_columns(df),
+        index_columns=index_columns(df),
     )
 
 
@@ -94,7 +195,7 @@ def render_standardized_data(standardized_data: StandardizedFinancialData) -> No
     for tab, statement_type in zip(tabs, ("BPA", "BPP", "DRE")):
         statement = standardized_data.statements[statement_type]
         with tab:
-            st.dataframe(pd.DataFrame(standardized_rows(statement.root)), use_container_width=True, hide_index=True)
+            st.dataframe(style_accounting_dataframe(pd.DataFrame(standardized_rows(statement.root))), use_container_width=True, hide_index=True)
             if statement_type == "DRE":
                 st.caption("Linhas com (=) são subtotais calculados a partir das linhas de origem; AV e AH não são exibidas.")
     asset_statement = standardized_data.statements["BPA"]
@@ -102,17 +203,17 @@ def render_standardized_data(standardized_data: StandardizedFinancialData) -> No
     if validation and validation.cvm_total is not None:
         st.markdown("#### Validação do total do ativo")
         cvm_column, standardized_column, difference_column, status_column = st.columns(4)
-        cvm_column.metric("Total CVM", validation.cvm_total)
-        standardized_column.metric("Total padronizado", validation.standardized_total)
-        difference_column.metric("Diferença", validation.difference)
+        cvm_column.metric("Total CVM", format_currency_br(validation.cvm_total))
+        standardized_column.metric("Total padronizado", format_currency_br(validation.standardized_total))
+        difference_column.metric("Diferença", format_currency_br(validation.difference))
         status_column.metric("Validação", "OK" if validation.is_within_tolerance else "Divergência")
         if not validation.is_within_tolerance:
-            st.warning(f"Diferença percentual: {validation.difference_percent:.4f}%")
+            st.warning(f"Diferença percentual: {format_percent_br(validation.difference_percent)}")
 
     liability_validation = standardized_data.statements["BPP"].validation
     if liability_validation:
         st.markdown("#### Validação do total do Passivo + PL")
-        st.caption(f"CVM: {liability_validation.cvm_total} | Padronizado: {liability_validation.standardized_total} | Diferença: {liability_validation.difference}")
+        st.caption(f"CVM: {format_currency_br(liability_validation.cvm_total)} | Padronizado: {format_currency_br(liability_validation.standardized_total)} | Diferença: {format_currency_br(liability_validation.difference)}")
 
     st.markdown("#### Auditoria — Contas da CVM não mapeadas")
     selected_statement = st.selectbox("Demonstração para auditoria", options=["BPA", "BPP", "DRE"])
@@ -120,7 +221,7 @@ def render_standardized_data(standardized_data: StandardizedFinancialData) -> No
     if table.empty:
         st.success("Não há contas não mapeadas nesta demonstração.")
     else:
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.dataframe(style_accounting_dataframe(table), use_container_width=True, hide_index=True)
 
 
 def render_analysis(analysis: VerticalHorizontalAnalysis) -> None:
@@ -143,7 +244,7 @@ def render_analysis(analysis: VerticalHorizontalAnalysis) -> None:
                     row[f"{year} AH (%)"] = "n/a — base zero" if line.ah_status == "BASE_ZERO" else "mudança de sinal" if line.ah_status == "SIGN_CHANGE" else line.ah
                     row[f"{year} Variação absoluta"] = line.absolute_change
             rows.append(row)
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(style_accounting_dataframe(pd.DataFrame(rows)), use_container_width=True, hide_index=True)
 
 
 def render_indicators(indicators: tuple[FinancialIndicator, ...], exercises: tuple[int, ...]) -> None:
@@ -159,7 +260,7 @@ def render_indicators(indicators: tuple[FinancialIndicator, ...], exercises: tup
             indicator = lookup[(code, year)]
             row[str(year)] = "N/A" if indicator.value is None else indicator.value
         rows.append(row)
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(style_accounting_dataframe(pd.DataFrame(rows)), use_container_width=True, hide_index=True)
     for code in ordered_codes:
         with st.expander(f"Fórmula e auditoria: {code}"):
             for year in reversed(exercises):
@@ -176,11 +277,11 @@ def render_evolution(comparisons: tuple[EvolutionComparison, ...], exercise: int
     highlights = principal_variations(comparisons, exercise)
     for item in highlights:
         change = f"{item.percentage_point_change:+.2f} p.p." if item.percentage_point_change is not None else f"{item.relative_change:+.2f}%"
-        st.markdown(f"- **{item.item}**: {item.classification} de {change}; variação absoluta: {item.absolute_change:+.2f}.")
+        st.markdown(f"- **{item.item}**: {item.classification} de {change}; variação absoluta: {format_currency_br(item.absolute_change)}.")
     for statement_type, title in (("BPA", "Ativo"), ("BPP", "Passivo + PL"), ("DRE", "DRE"), ("INDICATOR", "Indicadores — evolução")):
         st.markdown(f"#### {title}")
         rows = [{"Item": item.item, "Atual": item.current_value, "Anterior": item.previous_value, "Variação absoluta": item.absolute_change, "Variação relativa (%)": item.relative_change, "p.p.": item.percentage_point_change, "Classificação": item.classification, "Evolução": item.trend, "Maior valor": item.maximum_exercise, "Menor valor": item.minimum_exercise} for item in comparisons if item.statement_type == statement_type and item.current_exercise == exercise]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(style_accounting_dataframe(pd.DataFrame(rows)), use_container_width=True, hide_index=True)
 
 
 def render_charts(analysis: VerticalHorizontalAnalysis, indicators: tuple[FinancialIndicator, ...]) -> None:
@@ -236,16 +337,16 @@ def render_comparison(items: tuple[CompanyComparisonInput, ...]) -> None:
     st.divider(); st.subheader("Comparação entre empresas")
     st.caption("Tabelas e gráficos objetivos sobre resultados já calculados individualmente; sem ranking, diagnóstico ou recomendação.")
     values = pd.DataFrame(comparison_rows(items)); indicators = pd.DataFrame(indicator_rows(items))
-    st.markdown("#### Valores absolutos"); st.dataframe(values, use_container_width=True, hide_index=True)
-    st.markdown("#### Indicadores"); st.dataframe(indicators, use_container_width=True, hide_index=True)
+    st.markdown("#### Valores absolutos"); st.dataframe(format_dataframe_br(values), use_container_width=True, hide_index=True)
+    st.markdown("#### Indicadores"); st.dataframe(format_dataframe_br(indicators), use_container_width=True, hide_index=True)
     st.markdown("#### Estrutura e evolução (AV/AH)")
-    st.dataframe(pd.DataFrame(comparison_rows(items, AV_AH_ACCOUNTS, "av")), use_container_width=True, hide_index=True)
+    st.dataframe(style_accounting_dataframe(pd.DataFrame(comparison_rows(items, AV_AH_ACCOUNTS, "av"))), use_container_width=True, hide_index=True)
     ah = pd.DataFrame(comparison_rows(items, AV_AH_ACCOUNTS, "ah")).replace({None: "n/a"})
-    st.dataframe(ah, use_container_width=True, hide_index=True)
+    st.dataframe(style_accounting_dataframe(ah), use_container_width=True, hide_index=True)
     last_year = items[0].analysis.exercises[-1]
     st.markdown(f"#### Diferenças objetivas — {last_year}")
     differences = difference_rows(items, "ROA", last_year, indicator=True) + difference_rows(items, "RECEITA LÍQUIDA", last_year)
-    st.dataframe(pd.DataFrame(differences), use_container_width=True, hide_index=True)
+    st.dataframe(style_accounting_dataframe(pd.DataFrame(differences)), use_container_width=True, hide_index=True)
     charts = (("Receita Líquida", "RECEITA LÍQUIDA", False), ("Resultado Líquido", "(=) RESULTADO LÍQUIDO DO PERÍODO", False), ("Patrimônio Líquido", "PATRIMÔNIO LÍQUIDO", False), ("Capital de Terceiros", "TOTAL CAPITAL DE TERCEIROS", False), ("ROA", "ROA", True), ("ROE", "ROE", True), ("PCT", "PCT", True), ("LC", "LC", True))
     st.markdown("#### Gráficos comparativos")
     for title, key, is_indicator in charts:
@@ -277,7 +378,7 @@ def render_result(data: CvmFinancialData) -> None:
         st.markdown(f"✓ {names[statement_type]}")
         with st.expander(f"Prévia: {names[statement_type]}", expanded=statement_type == "BPA"):
             st.caption(f"Arquivo oficial: {statement.source_file} | Versão CVM: {statement.version or 'não informada'}")
-            st.dataframe(preview_dataframe(statement), use_container_width=True, hide_index=True)
+            st.dataframe(format_dataframe_br(preview_dataframe(statement), currency_columns=["Valor"]), use_container_width=True, hide_index=True)
 
     st.info("Esta tela mostra os dados brutos oficiais que dão origem às tabelas, gráficos e exportações abaixo.")
 
