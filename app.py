@@ -3,9 +3,7 @@
 import logging
 
 import pandas as pd
-
 from pandas.io.formats.style import Styler
-
 import streamlit as st
 
 from models.financial_models import CvmFinancialData, EvolutionComparison, FinancialIndicator, RawFinancialStatement, StandardizedFinancialData, StandardizedNode, VerticalHorizontalAnalysis
@@ -31,7 +29,10 @@ def apply_styles() -> None:
             .hero { padding: 1.4rem 0 1.8rem; }
             .hero h1 { margin-bottom: .25rem; }
             .muted { color: #5f6b7a; }
-            div.stButton > button { width: 100%; min-height: 3rem; font-weight: 600; }
+            /* Leve aumento de legibilidade sem deixar a interface exagerada. */
+            html { font-size: 17px; }
+            div[data-testid="stDataFrame"] { font-size: 15px; }
+            div.stButton > button { width: 100%; min-height: 3rem; font-weight: 600; font-size: 15px; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -103,7 +104,15 @@ def format_dataframe_br(df: pd.DataFrame, currency_columns=None, percent_columns
         elif pd.api.types.is_numeric_dtype(df[column]):
             formatters[column] = format_number_br
 
-    return df.style.format(formatters, na_rep="—")
+    return (
+        df.style
+        .format(formatters, na_rep="—")
+        .set_properties(**{"font-size": "15px"})
+        .set_table_styles([
+            {"selector": "th", "props": [("font-size", "15px"), ("font-weight", "600")]},
+            {"selector": "td", "props": [("font-size", "15px")]},
+        ])
+    )
 
 
 def monetary_columns(df: pd.DataFrame) -> list:
